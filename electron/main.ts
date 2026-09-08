@@ -9,10 +9,10 @@ let mainWindow: BrowserWindow | null = null;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 520,
-    height: 620,
-    minWidth: 420,
-    minHeight: 420,
+    width: 340,
+    height: 460,
+    minWidth: 260,
+    minHeight: 260,
     frame: false,
     transparent: true,
     alwaysOnTop: true,
@@ -31,7 +31,6 @@ function createWindow() {
 
   if (isDev && process.env.VITE_DEV_SERVER_URL) {
     void mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
-    mainWindow.webContents.openDevTools({ mode: "detach" });
   } else {
     void mainWindow.loadFile(path.join(__dirname, "../dist-renderer/index.html"));
   }

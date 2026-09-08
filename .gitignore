@@ -4,4 +4,6 @@ dist-renderer
 .DS_Store
 .env
 .venv
+.pycache
+__pycache__
 *.log

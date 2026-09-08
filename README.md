@@ -1,6 +1,6 @@
 # Local Meeting Copilot
 
-Local Meeting Copilot is a small local-first desktop meeting copilot MVP. It uses Electron for a transparent always-on-top overlay, React + TypeScript for the UI, a mock transcription stream for first-run testing, and Ollama as the default local assistant backend when available.
+Local Meeting Copilot is a small local-first desktop meeting copilot MVP. It uses Electron for a transparent always-on-top companion overlay, React + TypeScript for the UI, a local faster-whisper transcription service for real microphone transcription, and Ollama as the default local assistant backend when available.
 
 The default flow does not automate, scrape, or control the ChatGPT consumer website, and it does not require OpenAI API credits.
 
@@ -9,7 +9,8 @@ The default flow does not automate, scrape, or control the ChatGPT consumer webs
 - Transparent always-on-top desktop overlay.
 - Explicit Start and Stop controls for microphone capture.
 - Clear recording indicator while capture is active.
-- Mock transcription stream so the UI can be tested before local speech models are installed.
+- Real local microphone transcription through a faster-whisper WebSocket service.
+- Mock transcription fallback so the UI can still be tested before local speech models are installed.
 - Explicit Capture Screen Context button using Electron's OS-supported screen capture APIs.
 - Ask Assistant sends the transcript and screenshot-presence context to Ollama when it is reachable.
 - Mock assistant fallback when Ollama is missing or not running.
@@ -37,10 +38,22 @@ The app intentionally does not include any ChatGPT website automation. A future 
 
 ## Quick start
 
-Install dependencies:
+Install app dependencies:
 
 ```bash
 npm install
+```
+
+Install the local transcription service:
+
+```bash
+npm run transcribe:setup
+```
+
+Start real local transcription in one terminal:
+
+```bash
+npm run transcribe:server
 ```
 
 Run the desktop app:
@@ -49,7 +62,7 @@ Run the desktop app:
 npm run dev
 ```
 
-The app opens as a transparent always-on-top overlay. Press **Start** to request microphone permission and begin the mock transcript stream.
+The app opens as a transparent always-on-top companion. Press **Start** to connect to the local Whisper service. On macOS, the terminal or Python process may ask for microphone permission the first time the service captures audio.
 
 ## Ollama setup
 
@@ -73,28 +86,35 @@ ollama serve
 
 Then press **Ask Assistant** in the overlay. If Ollama is unavailable, the app shows a mock response instead of failing the UI.
 
-## Local transcription setup path
+## Local transcription
 
-The first MVP ships with `MockTranscriptionProvider` so the app can be tested immediately. The intended local Whisper integration is:
+The app connects to:
 
-1. Keep microphone permission and capture visible in the Electron UI.
-2. Stream audio chunks from the renderer or main process to a local subprocess/service.
-3. Implement the service with faster-whisper or whisper.cpp.
-4. Replace `MockTranscriptionProvider` with `WhisperServiceTranscriptionProvider`.
-
-Suggested faster-whisper environment:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install faster-whisper sounddevice websockets
+```text
+ws://127.0.0.1:8765/transcribe
 ```
 
-The current scaffold lives in:
+Set up manually if you do not want to use the npm helper:
+
+```bash
+python3 -m venv transcription-service/.venv
+source transcription-service/.venv/bin/activate
+pip install -r transcription-service/requirements.txt
+python transcription-service/server.py
+```
+
+The service defaults to the `base.en` faster-whisper model on CPU with int8 compute. You can change it:
+
+```bash
+transcription-service/.venv/bin/python transcription-service/server.py --model small.en --chunk-seconds 4
+```
+
+The transcription code lives in:
 
 - `src/transcription/types.ts`
 - `src/transcription/mockTranscription.ts`
 - `src/transcription/whisperServiceTranscription.ts`
+- `transcription-service/server.py`
 
 ## Architecture
 
@@ -127,12 +147,12 @@ interface TranscriptionProvider {
 Current implementations:
 
 - `MockTranscriptionProvider`
-- `WhisperServiceTranscriptionProvider` scaffold
+- `WhisperServiceTranscriptionProvider`
 
 ## Common error states
 
 - **Ollama is not reachable**: start Ollama or keep using demo mode.
-- **Missing microphone permission**: grant microphone access for the app in system settings, then press Start again.
+- **Missing microphone permission**: grant microphone access for Terminal, Python, or the packaged app in system settings, then press Start again.
 - **Missing screen-capture permission**: grant screen recording permission for the app in system settings, then press Capture Screen Context again.
 
 ## Build

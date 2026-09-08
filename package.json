@@ -9,6 +9,8 @@
     "dev": "node scripts/dev.mjs",
     "build": "tsc -p electron/tsconfig.json && vite build",
     "start": "npm run build && electron .",
+    "transcribe:setup": "python3 -m venv transcription-service/.venv && transcription-service/.venv/bin/python -m pip install --upgrade pip && transcription-service/.venv/bin/python -m pip install --default-timeout 120 -r transcription-service/requirements.txt",
+    "transcribe:server": "transcription-service/.venv/bin/python transcription-service/server.py",
     "typecheck": "tsc --noEmit && tsc -p electron/tsconfig.json --noEmit"
   },
   "dependencies": {
