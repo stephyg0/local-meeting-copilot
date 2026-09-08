@@ -24,20 +24,25 @@ class TranscriptionConfig:
 
 
 class MicrophoneWhisperSession:
-    def __init__(self, websocket, config: TranscriptionConfig, loop: asyncio.AbstractEventLoop):
+    def __init__(
+        self,
+        websocket,
+        config: TranscriptionConfig,
+        loop: asyncio.AbstractEventLoop,
+        model: WhisperModel,
+    ):
         self.websocket = websocket
         self.config = config
         self.loop = loop
         self.audio_queue: queue.Queue[np.ndarray] = queue.Queue()
         self.stop_event = threading.Event()
-        self.model = WhisperModel(config.model, device=config.device, compute_type=config.compute_type)
+        self.model = model
         self.stream: sd.InputStream | None = None
 
     async def start(self):
-        await self.send_status("loading")
+        await self.send_status("opening microphone")
         worker = threading.Thread(target=self._record_and_transcribe, daemon=True)
         worker.start()
-        await self.send_status("listening")
 
         while not self.stop_event.is_set():
             await asyncio.sleep(0.1)
@@ -57,7 +62,7 @@ class MicrophoneWhisperSession:
 
         def callback(indata, frames, _time, status):
             if status:
-                self.audio_queue.put(np.zeros(frames, dtype=np.float32))
+                self._send_from_thread({"type": "status", "message": f"audio warning: {status}"})
             self.audio_queue.put(indata[:, 0].copy())
 
         try:
@@ -68,6 +73,7 @@ class MicrophoneWhisperSession:
                 callback=callback,
             ) as stream:
                 self.stream = stream
+                self._send_from_thread({"type": "status", "message": "microphone open"})
                 while not self.stop_event.is_set():
                     data = self.audio_queue.get()
                     buffer = np.concatenate([buffer, data])
@@ -76,15 +82,18 @@ class MicrophoneWhisperSession:
 
                     audio = buffer[:chunk_size]
                     buffer = buffer[chunk_size:]
+                    self._send_from_thread({"type": "status", "message": "transcribing audio"})
                     segments, _info = self.model.transcribe(
                         audio,
                         beam_size=1,
-                        vad_filter=True,
+                        vad_filter=False,
                         language="en",
                     )
                     text = " ".join(segment.text.strip() for segment in segments).strip()
                     if text:
                         self._send_from_thread({"type": "segment", "text": text})
+                    else:
+                        self._send_from_thread({"type": "status", "message": "heard audio, no words yet"})
         except Exception as exc:
             self._send_from_thread({"type": "error", "message": str(exc)})
 
@@ -92,14 +101,14 @@ class MicrophoneWhisperSession:
         asyncio.run_coroutine_threadsafe(self.websocket.send(json.dumps(message)), self.loop)
 
 
-async def handle_client(websocket, config: TranscriptionConfig):
+async def handle_client(websocket, config: TranscriptionConfig, model: WhisperModel):
     session: MicrophoneWhisperSession | None = None
     session_task: asyncio.Task | None = None
     loop = asyncio.get_running_loop()
     async for raw_message in websocket:
         message = json.loads(raw_message)
         if message.get("type") == "start" and session is None:
-            session = MicrophoneWhisperSession(websocket, config, loop)
+            session = MicrophoneWhisperSession(websocket, config, loop, model)
             session_task = asyncio.create_task(session.start())
         elif message.get("type") == "stop" and session is not None:
             await session.stop()
@@ -112,10 +121,10 @@ async def main():
     parser = argparse.ArgumentParser(description="Local faster-whisper microphone transcription service.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--model", default="base.en")
+    parser.add_argument("--model", default="tiny.en")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--compute-type", default="int8")
-    parser.add_argument("--chunk-seconds", type=float, default=5.0)
+    parser.add_argument("--chunk-seconds", type=float, default=1.5)
     args = parser.parse_args()
 
     config = TranscriptionConfig(
@@ -125,7 +134,11 @@ async def main():
         chunk_seconds=args.chunk_seconds,
     )
 
-    async with serve(lambda ws: handle_client(ws, config), args.host, args.port):
+    print(f"Loading Whisper model '{config.model}'...")
+    model = WhisperModel(config.model, device=config.device, compute_type=config.compute_type)
+    print("Whisper model ready.")
+
+    async with serve(lambda ws: handle_client(ws, config, model), args.host, args.port):
         print(f"Local Whisper transcription service listening on ws://{args.host}:{args.port}/transcribe")
         await asyncio.Future()
 

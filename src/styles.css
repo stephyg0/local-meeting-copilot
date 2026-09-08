@@ -184,6 +184,30 @@ button:disabled {
   gap: 8px;
 }
 
+.ask-box {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.ask-box textarea {
+  width: 100%;
+  min-height: 70px;
+  resize: vertical;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #f5fbf8;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.ask-box textarea::placeholder {
+  color: #93a6a0;
+}
+
 .expanded-panel {
   margin-top: 12px;
 }
@@ -209,7 +233,8 @@ button:disabled {
 
 .screenshot-preview,
 .transcript,
-.assistant-response {
+.assistant-response,
+.assistant-queue {
   border-top: 1px solid rgba(255, 255, 255, 0.1);
   padding-top: 10px;
   margin-top: 10px;
@@ -252,6 +277,7 @@ h2 {
   border-radius: 8px;
 }
 
+.queue-log,
 .transcript-log {
   display: grid;
   gap: 7px;
@@ -261,6 +287,7 @@ h2 {
   padding-right: 4px;
 }
 
+.queue-item,
 .transcript-log article {
   display: grid;
   gap: 3px;
@@ -269,12 +296,53 @@ h2 {
   background: rgba(255, 255, 255, 0.07);
 }
 
+.queue-item {
+  border-left: 3px solid #7aa7ff;
+}
+
+.queue-item.running {
+  border-left-color: #ffd166;
+}
+
+.queue-item.done {
+  border-left-color: #78e0b1;
+}
+
+.queue-item.error {
+  border-left-color: #ff756f;
+}
+
+.queue-item div {
+  display: grid;
+  gap: 2px;
+}
+
+.queue-item strong {
+  color: #ffffff;
+  font-size: 12px;
+}
+
+.queue-item span {
+  color: #9fb1ab;
+  font-size: 10px;
+}
+
+.text-button {
+  min-height: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #9bdcbd;
+  font-size: 11px;
+}
+
 .transcript-log time {
   color: #9bdcbd;
   font-size: 10px;
 }
 
 .transcript-log p,
+.queue-item p,
 .assistant-response p {
   color: #f0f8f4;
   font-size: 12px;

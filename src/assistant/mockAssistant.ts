@@ -14,6 +14,7 @@ export class MockAssistantProvider implements AssistantProvider {
       provider: this.label,
       text: [
         "Demo response:",
+        request.question ? `Question: ${request.question}` : "No question was typed.",
         `I see ${words} transcript words so far.`,
         screenshotNote,
         "Once Ollama is running, this same button will use your local model."

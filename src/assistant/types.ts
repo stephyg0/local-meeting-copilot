@@ -1,5 +1,6 @@
 export interface AssistantRequest {
   transcript: string;
+  question?: string;
   screenshotDataUrl?: string;
 }
 

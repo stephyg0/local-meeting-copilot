@@ -10,7 +10,7 @@ The default flow does not automate, scrape, or control the ChatGPT consumer webs
 - Explicit Start and Stop controls for microphone capture.
 - Clear recording indicator while capture is active.
 - Real local microphone transcription through a faster-whisper WebSocket service.
-- Mock transcription fallback so the UI can still be tested before local speech models are installed.
+- No fake transcript in the normal Start flow: if local Whisper is unavailable, the app shows an error instead.
 - Explicit Capture Screen Context button using Electron's OS-supported screen capture APIs.
 - Ask Assistant sends the transcript and screenshot-presence context to Ollama when it is reachable.
 - Mock assistant fallback when Ollama is missing or not running.
@@ -103,7 +103,7 @@ pip install -r transcription-service/requirements.txt
 python transcription-service/server.py
 ```
 
-The service defaults to the `base.en` faster-whisper model on CPU with int8 compute. You can change it:
+The service defaults to the small and fast `tiny.en` faster-whisper model on CPU with int8 compute. You can change it:
 
 ```bash
 transcription-service/.venv/bin/python transcription-service/server.py --model small.en --chunk-seconds 4
@@ -144,9 +144,8 @@ interface TranscriptionProvider {
 }
 ```
 
-Current implementations:
+Current implementation:
 
-- `MockTranscriptionProvider`
 - `WhisperServiceTranscriptionProvider`
 
 ## Common error states

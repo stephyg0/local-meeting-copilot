@@ -1,7 +1,6 @@
-import { useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { AssistantRegistry } from "../assistant/providerRegistry";
 import type { AssistantResponse } from "../assistant/types";
-import { MockTranscriptionProvider } from "../transcription/mockTranscription";
 import type { TranscriptSegment, TranscriptionProvider } from "../transcription/types";
 import { WhisperServiceTranscriptionProvider } from "../transcription/whisperServiceTranscription";
 
@@ -12,10 +11,22 @@ interface Status {
   message: string;
 }
 
+type QueueStatus = "queued" | "running" | "done" | "error";
+
+interface AssistantQueueItem {
+  id: string;
+  question: string;
+  transcript: string;
+  screenshotDataUrl?: string;
+  createdAt: Date;
+  status: QueueStatus;
+  response?: AssistantResponse;
+  error?: string;
+}
+
 export function App() {
   const assistantRegistry = useMemo(() => new AssistantRegistry(), []);
   const whisperProvider = useMemo<TranscriptionProvider>(() => new WhisperServiceTranscriptionProvider(), []);
-  const mockProvider = useMemo<TranscriptionProvider>(() => new MockTranscriptionProvider(), []);
   const activeTranscriptionProvider = useRef<TranscriptionProvider | null>(null);
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
   const [isRecording, setIsRecording] = useState(false);
@@ -25,8 +36,16 @@ export function App() {
   const [isAsking, setIsAsking] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const [providerLabel, setProviderLabel] = useState(whisperProvider.label);
+  const [assistantDraft, setAssistantDraft] = useState("");
+  const [assistantQueue, setAssistantQueue] = useState<AssistantQueueItem[]>([]);
+  const isProcessingQueue = useRef(false);
 
   const transcript = segments.map((segment) => segment.text).join("\n");
+  const queuedCount = assistantQueue.filter((item) => item.status === "queued").length;
+
+  useEffect(() => {
+    void processAssistantQueue();
+  }, [assistantQueue, isAsking]);
 
   async function startTranscription() {
     const handleSegment = (segment: TranscriptSegment) => {
@@ -35,23 +54,25 @@ export function App() {
 
     try {
       setStatus({ kind: "working", message: "Connecting to local Whisper service..." });
-      await whisperProvider.start(handleSegment);
+      if (whisperProvider instanceof WhisperServiceTranscriptionProvider) {
+        await whisperProvider.start(handleSegment, (message, kind = "status") => {
+          setStatus({
+            kind: kind === "error" ? "error" : "recording",
+            message: `Whisper service: ${message}.`
+          });
+        });
+      } else {
+        await whisperProvider.start(handleSegment);
+      }
       activeTranscriptionProvider.current = whisperProvider;
       setProviderLabel(whisperProvider.label);
       setIsRecording(true);
       setIsExpanded(true);
       setStatus({ kind: "recording", message: "Listening with local Whisper." });
     } catch (error) {
-      await mockProvider.start(handleSegment);
-      activeTranscriptionProvider.current = mockProvider;
-      setProviderLabel(mockProvider.label);
-      setIsRecording(true);
-      setIsExpanded(true);
       setStatus({
         kind: "error",
-        message: `Whisper is not running, so demo transcription is active. ${
-          error instanceof Error ? error.message : "Start the local service for real transcription."
-        }`
+        message: error instanceof Error ? error.message : "Start the local Whisper service for real transcription."
       });
     }
   }
@@ -80,30 +101,75 @@ export function App() {
     }
   }
 
-  async function askAssistant() {
+  function queueAssistantAsk(event?: FormEvent) {
+    event?.preventDefault();
+    const question = assistantDraft.trim() || "Help me with this meeting.";
+    const item: AssistantQueueItem = {
+      id: crypto.randomUUID(),
+      question,
+      transcript,
+      screenshotDataUrl: screenCapture?.dataUrl,
+      createdAt: new Date(),
+      status: "queued"
+    };
+    setAssistantDraft("");
+    setIsExpanded(true);
+    setAssistantQueue((current) => [...current, item]);
+    setStatus({ kind: isRecording ? "recording" : "idle", message: `Queued: ${question}` });
+  }
+
+  async function processAssistantQueue() {
+    if (isProcessingQueue.current) {
+      return;
+    }
+
+    const next = assistantQueue.find((item) => item.status === "queued");
+    if (!next) {
+      return;
+    }
+
+    isProcessingQueue.current = true;
     setIsAsking(true);
     setAssistantResponse(null);
-    setStatus({ kind: "working", message: "Asking local assistant backend..." });
+    setStatus({ kind: "working", message: `Asking: ${next.question}` });
+    setAssistantQueue((current) => current.map((item) => (
+      item.id === next.id ? { ...item, status: "running" } : item
+    )));
+
     try {
       const response = await assistantRegistry.askWithFallback({
-        transcript,
-        screenshotDataUrl: screenCapture?.dataUrl
+        transcript: next.transcript,
+        question: next.question,
+        screenshotDataUrl: next.screenshotDataUrl
       });
       setAssistantResponse(response);
       setIsExpanded(true);
+      setAssistantQueue((current) => current.map((item) => (
+        item.id === next.id ? { ...item, status: "done", response } : item
+      )));
       setStatus({ kind: isRecording ? "recording" : "idle", message: `Assistant response from ${response.provider}.` });
     } catch (error) {
+      const message = error instanceof Error ? error.message : "Assistant backend failed.";
+      setAssistantQueue((current) => current.map((item) => (
+        item.id === next.id ? { ...item, status: "error", error: message } : item
+      )));
       setStatus({
         kind: "error",
-        message: error instanceof Error ? error.message : "Assistant backend failed."
+        message
       });
     } finally {
       setIsAsking(false);
+      isProcessingQueue.current = false;
     }
   }
 
   function clearTranscript() {
     setSegments([]);
+    setAssistantResponse(null);
+  }
+
+  function clearQueue() {
+    setAssistantQueue([]);
     setAssistantResponse(null);
   }
 
@@ -135,23 +201,57 @@ export function App() {
         ) : (
           <button className="danger" onClick={stopTranscription}>Stop</button>
         )}
-        <button onClick={askAssistant} disabled={isAsking}>
-          {isAsking ? "Asking" : "Ask"}
+        <button onClick={() => queueAssistantAsk()}>
+          {isAsking || queuedCount > 0 ? `Queue ${queuedCount}` : "Ask"}
         </button>
       </section>
 
       {isExpanded && (
         <section className="expanded-panel">
+          <form className="ask-box" onSubmit={queueAssistantAsk}>
+            <textarea
+              value={assistantDraft}
+              onChange={(event) => setAssistantDraft(event.target.value)}
+              placeholder="Ask about what was just said..."
+              rows={3}
+            />
+            <button type="submit" className="primary">
+              {isAsking ? "Add to Queue" : "Queue Ask"}
+            </button>
+          </form>
+
           <section className="secondary-actions">
             <button onClick={captureScreenContext}>Screenshot</button>
-            <button className="ghost" onClick={clearTranscript}>Clear</button>
+            <button className="ghost" onClick={clearTranscript}>Clear Transcript</button>
           </section>
 
           <section className="privacy-strip">
             <span>Mic starts only after Start.</span>
             <span>Screenshots happen only when clicked.</span>
-            <span>Ollama first, demo fallback.</span>
+            <span>Assistant asks use Ollama first, mock answer fallback.</span>
+            <span>Asks run one at a time; you can queue more while one runs.</span>
           </section>
+
+          {assistantQueue.length > 0 && (
+            <section className="assistant-queue">
+              <div className="section-heading">
+                <h2>Ask Queue</h2>
+                <button className="text-button" onClick={clearQueue}>Clear</button>
+              </div>
+              <div className="queue-log">
+                {assistantQueue.map((item) => (
+                  <article key={item.id} className={`queue-item ${item.status}`}>
+                    <div>
+                      <strong>{item.question}</strong>
+                      <span>{item.status} · {item.createdAt.toLocaleTimeString()}</span>
+                    </div>
+                    {item.response && <p>{item.response.text}</p>}
+                    {item.error && <p>{item.error}</p>}
+                  </article>
+                ))}
+              </div>
+            </section>
+          )}
 
           {screenCapture && (
             <section className="screenshot-preview">
@@ -170,7 +270,7 @@ export function App() {
             </div>
             <div className="transcript-log">
               {segments.length === 0 ? (
-                <p className="empty">Press Start to begin the demo transcript.</p>
+                <p className="empty">Press Start to begin real local transcription.</p>
               ) : (
                 segments.map((segment) => (
                   <article key={segment.id}>

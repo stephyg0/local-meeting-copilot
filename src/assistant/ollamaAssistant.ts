@@ -22,6 +22,9 @@ export class OllamaAssistantProvider implements AssistantProvider {
       "Transcript so far:",
       request.transcript || "(No transcript yet.)",
       "",
+      "User question:",
+      request.question || "Help me with this meeting.",
+      "",
       request.screenshotDataUrl
         ? "A screenshot was attached by explicit user action. The current MVP sends only a presence signal; multimodal model support can be added behind this provider."
         : "No screenshot was attached."
