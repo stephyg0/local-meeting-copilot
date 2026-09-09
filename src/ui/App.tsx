@@ -1,298 +1,140 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { AssistantRegistry } from "../assistant/providerRegistry";
-import type { AssistantResponse } from "../assistant/types";
-import type { TranscriptSegment, TranscriptionProvider } from "../transcription/types";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { WhisperServiceTranscriptionProvider } from "../transcription/whisperServiceTranscription";
-
-type StatusKind = "idle" | "recording" | "error" | "working";
-
-interface Status {
-  kind: StatusKind;
-  message: string;
-}
-
-type QueueStatus = "queued" | "running" | "done" | "error";
-
-interface AssistantQueueItem {
-  id: string;
-  question: string;
-  transcript: string;
-  screenshotDataUrl?: string;
-  createdAt: Date;
-  status: QueueStatus;
-  response?: AssistantResponse;
-  error?: string;
-}
+import type { TranscriptSegment } from "../transcription/types";
 
 export function App() {
-  const assistantRegistry = useMemo(() => new AssistantRegistry(), []);
-  const whisperProvider = useMemo<TranscriptionProvider>(() => new WhisperServiceTranscriptionProvider(), []);
-  const activeTranscriptionProvider = useRef<TranscriptionProvider | null>(null);
+  const provider = useMemo(() => new WhisperServiceTranscriptionProvider(), []);
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
-  const [isRecording, setIsRecording] = useState(false);
-  const [status, setStatus] = useState<Status>({ kind: "idle", message: "Ready. Start uses local Whisper if the service is running." });
-  const [screenCapture, setScreenCapture] = useState<ScreenCaptureResult | null>(null);
-  const [assistantResponse, setAssistantResponse] = useState<AssistantResponse | null>(null);
-  const [isAsking, setIsAsking] = useState(false);
-  const [isExpanded, setIsExpanded] = useState(false);
-  const [providerLabel, setProviderLabel] = useState(whisperProvider.label);
-  const [assistantDraft, setAssistantDraft] = useState("");
-  const [assistantQueue, setAssistantQueue] = useState<AssistantQueueItem[]>([]);
-  const isProcessingQueue = useRef(false);
+  const [expanded, setExpanded] = useState(false);
+  const [showTranscript, setShowTranscript] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [asking, setAsking] = useState(false);
+  const [source, setSource] = useState("microphone");
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState(false);
+  const content = useRef<HTMLDivElement>(null);
+  const captureGeneration = useRef(0);
+  const transcript = segments.map(segment => segment.text).join("\n");
+  const bridge = window.meetingCopilot;
 
-  const transcript = segments.map((segment) => segment.text).join("\n");
-  const queuedCount = assistantQueue.filter((item) => item.status === "queued").length;
+  function report(text: string, failed = false) { setMessage(text); setError(failed); }
 
-  useEffect(() => {
-    void processAssistantQueue();
-  }, [assistantQueue, isAsking]);
+  useEffect(() => () => { void provider.stop(); }, [provider]);
 
-  async function startTranscription() {
-    const handleSegment = (segment: TranscriptSegment) => {
-      setSegments((current) => [...current, segment]);
-    };
+  useLayoutEffect(() => {
+    let cancelled = false;
+    let observer: ResizeObserver | undefined;
+    void (async () => {
+      await bridge?.resizeWindow(expanded, false);
+      if (cancelled || !expanded || !content.current) return;
+      const measure = () => {
+        if (!cancelled && content.current) void bridge?.resizeWindowToContent(Math.ceil(content.current.getBoundingClientRect().height) + 26);
+      };
+      observer = new ResizeObserver(measure);
+      observer.observe(content.current);
+      measure();
+    })();
+    return () => { cancelled = true; observer?.disconnect(); };
+  }, [expanded]);
 
+  async function start() {
+    if (starting || recording) return;
+    setStarting(true);
+    const generation = ++captureGeneration.current;
+    report("Starting audio...");
     try {
-      setStatus({ kind: "working", message: "Connecting to local Whisper service..." });
-      if (whisperProvider instanceof WhisperServiceTranscriptionProvider) {
-        await whisperProvider.start(handleSegment, (message, kind = "status") => {
-          setStatus({
-            kind: kind === "error" ? "error" : "recording",
-            message: `Whisper service: ${message}.`
-          });
-        });
-      } else {
-        await whisperProvider.start(handleSegment);
-      }
-      activeTranscriptionProvider.current = whisperProvider;
-      setProviderLabel(whisperProvider.label);
-      setIsRecording(true);
-      setIsExpanded(true);
-      setStatus({ kind: "recording", message: "Listening with local Whisper." });
-    } catch (error) {
-      setStatus({
-        kind: "error",
-        message: error instanceof Error ? error.message : "Start the local Whisper service for real transcription."
-      });
-    }
+      await bridge?.ensureTranscription();
+      if (generation !== captureGeneration.current) return;
+      await provider.start(segment => setSegments(current => [...current, segment]), (text, kind) => {
+        if (kind === "error") { setRecording(false); report(text, true); }
+      }, source);
+      if (generation !== captureGeneration.current) { await provider.stop(); return; }
+      setRecording(true);
+      report("");
+    } catch (failure) { if (generation === captureGeneration.current) report(String(failure instanceof Error ? failure.message : failure), true); }
+    finally { setStarting(false); }
   }
 
-  async function stopTranscription() {
-    await activeTranscriptionProvider.current?.stop();
-    activeTranscriptionProvider.current = null;
-    setIsRecording(false);
-    setStatus({ kind: "idle", message: "Recording stopped." });
-  }
+  async function stop() { captureGeneration.current++; await provider.stop(); setRecording(false); report(""); }
 
-  async function captureScreenContext() {
+  async function ask() {
+    if (asking) return;
+    setAsking(true);
+    const snapshotTranscript = transcript;
+    report("Capturing screen and sending to ChatGPT...");
     try {
-      setStatus({ kind: "working", message: "Capturing screen by explicit request..." });
-      if (!window.meetingCopilot?.captureScreen) {
-        throw new Error("Screen capture is available only inside the desktop app.");
-      }
-      const result = await window.meetingCopilot.captureScreen();
-      setScreenCapture(result);
-      setStatus({ kind: isRecording ? "recording" : "idle", message: `Screen context captured from ${result.name}.` });
-    } catch (error) {
-      setStatus({
-        kind: "error",
-        message: error instanceof Error ? error.message : "Screen capture permission was denied or unavailable."
-      });
-    }
+      if (!bridge) throw new Error("Desktop connection unavailable. Relaunch Bulby.");
+      const screenshot = await bridge.captureScreen();
+      await bridge.askBrowser(snapshotTranscript, screenshot.dataUrl);
+      report("Sent to ChatGPT.");
+    } catch (failure) { report(failure instanceof Error ? failure.message : String(failure), true); }
+    finally { setAsking(false); }
   }
 
-  function queueAssistantAsk(event?: FormEvent) {
-    event?.preventDefault();
-    const question = assistantDraft.trim() || "Help me with this meeting.";
-    const item: AssistantQueueItem = {
-      id: crypto.randomUUID(),
-      question,
-      transcript,
-      screenshotDataUrl: screenCapture?.dataUrl,
-      createdAt: new Date(),
-      status: "queued"
-    };
-    setAssistantDraft("");
-    setIsExpanded(true);
-    setAssistantQueue((current) => [...current, item]);
-    setStatus({ kind: isRecording ? "recording" : "idle", message: `Queued: ${question}` });
-  }
-
-  async function processAssistantQueue() {
-    if (isProcessingQueue.current) {
-      return;
-    }
-
-    const next = assistantQueue.find((item) => item.status === "queued");
-    if (!next) {
-      return;
-    }
-
-    isProcessingQueue.current = true;
-    setIsAsking(true);
-    setAssistantResponse(null);
-    setStatus({ kind: "working", message: `Asking: ${next.question}` });
-    setAssistantQueue((current) => current.map((item) => (
-      item.id === next.id ? { ...item, status: "running" } : item
-    )));
-
+  async function pair() {
     try {
-      const response = await assistantRegistry.askWithFallback({
-        transcript: next.transcript,
-        question: next.question,
-        screenshotDataUrl: next.screenshotDataUrl
-      });
-      setAssistantResponse(response);
-      setIsExpanded(true);
-      setAssistantQueue((current) => current.map((item) => (
-        item.id === next.id ? { ...item, status: "done", response } : item
-      )));
-      setStatus({ kind: isRecording ? "recording" : "idle", message: `Assistant response from ${response.provider}.` });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Assistant backend failed.";
-      setAssistantQueue((current) => current.map((item) => (
-        item.id === next.id ? { ...item, status: "error", error: message } : item
-      )));
-      setStatus({
-        kind: "error",
-        message
-      });
-    } finally {
-      setIsAsking(false);
-      isProcessingQueue.current = false;
-    }
+      if (!bridge) throw new Error("Open the Bulby desktop application.");
+      await bridge.pairBrowser();
+      report("Pairing code copied. Load the opened extension folder in Chrome, open ChatGPT, then paste the code into the Bulby extension.");
+    } catch (failure) { report(String(failure), true); }
   }
 
-  function clearTranscript() {
-    setSegments([]);
-    setAssistantResponse(null);
+  async function copy() {
+    try { if (bridge) await bridge.copyText(transcript); else await navigator.clipboard.writeText(transcript); report("Transcript copied."); }
+    catch { report("Could not copy the transcript.", true); }
   }
 
-  function clearQueue() {
-    setAssistantQueue([]);
-    setAssistantResponse(null);
+  async function close() { await stop(); await bridge?.closeWindow(); }
+
+  function beginResize(event: React.PointerEvent<HTMLDivElement>, edge: "bottom-left" | "bottom-center" | "bottom-right") {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    void bridge?.resizeWindowStart(edge, event.screenX, event.screenY);
+  }
+  function moveResize(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) void bridge?.resizeWindowMove(event.screenX, event.screenY);
+  }
+  function endResize(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    void bridge?.resizeWindowEnd();
   }
 
-  return (
-    <main className={`pet-shell ${isExpanded ? "expanded" : "compact"}`}>
+  return <main className={`pet-shell ${expanded ? "expanded" : "compact"}`}>
+    <div ref={content} className="shell-content">
       <header className="drag-region pet-head">
-        <button
-          className={`pet-face ${isRecording ? "active" : ""}`}
-          onClick={() => setIsExpanded((current) => !current)}
-          aria-label={isExpanded ? "Collapse copilot" : "Expand copilot"}
-        >
-          <span className="pet-eye" />
-          <span className="pet-eye" />
+        <button className={`pet-face ${recording ? "active" : ""}`} aria-label={expanded ? "Collapse copilot" : "Expand copilot"} onClick={() => { setExpanded(!expanded); setShowTranscript(false); }}>
+          <span className="pet-eye" /><span className="pet-eye" />
         </button>
-        <div className="pet-title">
-          <p>Local copilot</p>
-          <strong>{isRecording ? "listening" : "ready"}</strong>
-        </div>
-        <div className={`recording-dot ${isRecording ? "active" : ""}`} aria-label={isRecording ? "Recording" : "Idle"} />
+        <div className="pet-title"><strong>{recording ? (source === "both" ? "recording mic + call" : source === "system" ? "recording call audio" : "recording microphone") : "ready"}</strong></div>
+        <div className="audio-bars" aria-label={recording ? "Recording" : "Idle"}>{[0,1,2,3,4].map(i => <span key={i} />)}</div>
+        <button className="close-button" onClick={() => void close()} aria-label="Close copilot">×</button>
       </header>
-
-      <section className={`status ${status.kind}`}>
-        <span>{status.message}</span>
-      </section>
-
-      <section className="pet-actions">
-        {!isRecording ? (
-          <button className="primary" onClick={startTranscription}>Start</button>
-        ) : (
-          <button className="danger" onClick={stopTranscription}>Stop</button>
-        )}
-        <button onClick={() => queueAssistantAsk()}>
-          {isAsking || queuedCount > 0 ? `Queue ${queuedCount}` : "Ask"}
-        </button>
-      </section>
-
-      {isExpanded && (
-        <section className="expanded-panel">
-          <form className="ask-box" onSubmit={queueAssistantAsk}>
-            <textarea
-              value={assistantDraft}
-              onChange={(event) => setAssistantDraft(event.target.value)}
-              placeholder="Ask about what was just said..."
-              rows={3}
-            />
-            <button type="submit" className="primary">
-              {isAsking ? "Add to Queue" : "Queue Ask"}
-            </button>
-          </form>
-
-          <section className="secondary-actions">
-            <button onClick={captureScreenContext}>Screenshot</button>
-            <button className="ghost" onClick={clearTranscript}>Clear Transcript</button>
-          </section>
-
-          <section className="privacy-strip">
-            <span>Mic starts only after Start.</span>
-            <span>Screenshots happen only when clicked.</span>
-            <span>Assistant asks use Ollama first, mock answer fallback.</span>
-            <span>Asks run one at a time; you can queue more while one runs.</span>
-          </section>
-
-          {assistantQueue.length > 0 && (
-            <section className="assistant-queue">
-              <div className="section-heading">
-                <h2>Ask Queue</h2>
-                <button className="text-button" onClick={clearQueue}>Clear</button>
-              </div>
-              <div className="queue-log">
-                {assistantQueue.map((item) => (
-                  <article key={item.id} className={`queue-item ${item.status}`}>
-                    <div>
-                      <strong>{item.question}</strong>
-                      <span>{item.status} · {item.createdAt.toLocaleTimeString()}</span>
-                    </div>
-                    {item.response && <p>{item.response.text}</p>}
-                    {item.error && <p>{item.error}</p>}
-                  </article>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {screenCapture && (
-            <section className="screenshot-preview">
-              <div>
-                <strong>Screen context</strong>
-                <span>{screenCapture.name}</span>
-              </div>
-              <img src={screenCapture.dataUrl} alt="Latest user-captured screen context" />
-            </section>
-          )}
-
-          <section className="transcript">
-            <div className="section-heading">
-              <h2>Transcript</h2>
-              <span>{providerLabel}</span>
-            </div>
-            <div className="transcript-log">
-              {segments.length === 0 ? (
-                <p className="empty">Press Start to begin real local transcription.</p>
-              ) : (
-                segments.map((segment) => (
-                  <article key={segment.id}>
-                    <time>{segment.timestamp.toLocaleTimeString()}</time>
-                    <p>{segment.text}</p>
-                  </article>
-                ))
-              )}
-            </div>
-          </section>
-
-          {assistantResponse && (
-            <section className="assistant-response">
-              <div className="section-heading">
-                <h2>Assistant</h2>
-                <span>{assistantResponse.provider}</span>
-              </div>
-              <p>{assistantResponse.text}</p>
-            </section>
-          )}
+      {expanded && <>
+        <div className="audio-source" role="group" aria-label="Audio source">
+          <button aria-pressed={source === "microphone"} disabled={recording || starting} onClick={() => setSource("microphone")}>Microphone</button>
+          <button aria-pressed={source === "system"} disabled={recording || starting} onClick={() => setSource("system")}>Call audio</button>
+          <button aria-pressed={source === "both"} disabled={recording || starting} onClick={() => setSource("both")}>Both</button>
+          <button className="browser-connect" onClick={() => void pair()}>Connect Chrome</button>
+        </div>
+        <section className="pet-actions">
+          <button className={recording ? "danger" : "primary"} disabled={starting} onClick={() => void (recording ? stop() : start())}>{starting ? "Starting..." : recording ? "Stop" : "Start"}</button>
+          <button disabled={asking} onClick={() => void ask()} title="Send current screen and transcript to your paired ChatGPT tab">{asking ? "Sending..." : "Ask"}</button>
         </section>
-      )}
-    </main>
-  );
+        {message && <div role={error ? "alert" : "status"} className={`status ${error ? "error" : ""}`}>{message}</div>}
+        <section className="transcript">
+          <div className="section-heading">
+            <button className="transcript-toggle" aria-expanded={showTranscript} aria-label={showTranscript ? "Hide transcript" : "Show transcript"} onClick={() => setShowTranscript(!showTranscript)}>
+              <h2>Transcript</h2><span className={`transcript-chevron ${showTranscript ? "down" : "up"}`} aria-hidden="true" />
+            </button>
+            <div className="transcript-tools">
+              <button className="icon-button" aria-label="Copy transcript" title="Copy transcript" disabled={!transcript} onClick={() => void copy()}>⧉</button>
+              <button className="text-button" disabled={!transcript} onClick={() => setSegments([])}>Clear</button>
+            </div>
+          </div>
+          {showTranscript && <div className="transcript-log" aria-live="polite">{segments.length ? segments.map(segment => <article key={segment.id}><p>{segment.text}</p></article>) : <p className="empty">{recording ? "Waiting for speech..." : "No transcript yet."}</p>}</div>}
+        </section>
+      </>}
+    </div>
+    {expanded && bridge && (["bottom-left", "bottom-center", "bottom-right"] as const).map(edge => <div key={edge} className={`resize-handle ${edge}`} onPointerDown={event => beginResize(event, edge)} onPointerMove={moveResize} onPointerUp={endResize} onPointerCancel={endResize} />)}
+  </main>;
 }

@@ -1,46 +1,27 @@
 import { spawn } from "node:child_process";
+import { createServer } from "vite";
+import electron from "electron";
 
-const isWindows = process.platform === "win32";
-const npmCommand = isWindows ? "npm.cmd" : "npm";
-const electronCommand = isWindows ? "electron.cmd" : "electron";
-
-const processes = [];
-
-function run(command, args, options = {}) {
-  const child = spawn(command, args, {
-    stdio: "inherit",
-    shell: false,
-    ...options
-  });
-  processes.push(child);
-  child.on("exit", (code) => {
-    if (code && code !== 0) {
-      cleanup(code);
-    }
-  });
-  return child;
-}
-
-function cleanup(code = 0) {
-  for (const child of processes) {
-    if (!child.killed) {
-      child.kill();
-    }
-  }
+const compiler = spawn(process.execPath, ["node_modules/typescript/bin/tsc", "-p", "electron/tsconfig.json"], { stdio: "inherit" });
+const code = await new Promise(resolve => compiler.once("exit", resolve));
+if (code !== 0) process.exit(Number(code) || 1);
+const server = await createServer({ server: { host: "127.0.0.1", port: 5173, strictPort: false } });
+await server.listen();
+server.printUrls();
+const address = server.httpServer.address();
+const child = spawn(electron, ["."], {
+  stdio: "inherit",
+  env: { ...process.env, VITE_DEV_SERVER_URL: `http://127.0.0.1:${address.port}` }
+});
+let exiting = false;
+async function cleanup(code = 0) {
+  if (exiting) return;
+  exiting = true;
+  child.kill();
+  await server.close();
   process.exit(code);
 }
-
-process.on("SIGINT", () => cleanup(0));
-process.on("SIGTERM", () => cleanup(0));
-
-run(npmCommand, ["exec", "tsc", "--", "-p", "electron/tsconfig.json", "--watch", "--preserveWatchOutput"]);
-run(npmCommand, ["exec", "vite"]);
-
-setTimeout(() => {
-  run(electronCommand, ["."], {
-    env: {
-      ...process.env,
-      VITE_DEV_SERVER_URL: "http://localhost:5173"
-    }
-  });
-}, 1600);
+child.on("error", error => { console.error(error); void cleanup(1); });
+child.on("exit", code => void cleanup(code || 0));
+process.on("SIGINT", () => void cleanup());
+process.on("SIGTERM", () => void cleanup());

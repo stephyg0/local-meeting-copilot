@@ -1,167 +1,75 @@
-# Local Meeting Copilot
+# Bulby
 
-Local Meeting Copilot is a small local-first desktop meeting copilot MVP. It uses Electron for a transparent always-on-top companion overlay, React + TypeScript for the UI, a local faster-whisper transcription service for real microphone transcription, and Ollama as the default local assistant backend when available.
+A local desktop transcription overlay with an explicit Ask handoff to your ChatGPT tab in Chrome. Audio transcription uses faster-whisper locally. Ask sends the current transcript and a fresh screenshot to ChatGPT through the included browser extension; that context leaves your computer and is processed by ChatGPT. No OpenAI API key is required.
 
-The default flow does not automate, scrape, or control the ChatGPT consumer website, and it does not require OpenAI API credits.
-
-## MVP status
-
-- Transparent always-on-top desktop overlay.
-- Explicit Start and Stop controls for microphone capture.
-- Clear recording indicator while capture is active.
-- Real local microphone transcription through a faster-whisper WebSocket service.
-- No fake transcript in the normal Start flow: if local Whisper is unavailable, the app shows an error instead.
-- Explicit Capture Screen Context button using Electron's OS-supported screen capture APIs.
-- Ask Assistant sends the transcript and screenshot-presence context to Ollama when it is reachable.
-- Mock assistant fallback when Ollama is missing or not running.
-- Provider interfaces for assistant and transcription backends.
-- Scaffold for a future local Whisper service boundary.
-
-## Privacy model
-
-All privacy-sensitive actions are opt-in and visible:
-
-- Microphone access is requested only after pressing **Start**.
-- Audio tracks are stopped after pressing **Stop**.
-- Screen context is captured only after pressing **Capture Screen Context**.
-- Assistant calls happen only after pressing **Ask Assistant**.
-- By default, assistant calls target `http://127.0.0.1:11434`, the local Ollama HTTP API.
-
-The app intentionally does not include any ChatGPT website automation. A future official OpenAI API provider should be added as a new implementation of the assistant provider interface and kept disabled unless explicitly configured.
-
-## Requirements
-
-- Node.js 20 or newer.
-- npm 10 or newer.
-- Optional: Ollama for local assistant responses.
-- Optional future path: Python 3.10+ plus faster-whisper or whisper.cpp for real local transcription.
-
-## Quick start
-
-Install app dependencies:
+## Run
 
 ```bash
 npm install
-```
-
-Install the local transcription service:
-
-```bash
 npm run transcribe:setup
-```
-
-Start real local transcription in one terminal:
-
-```bash
-npm run transcribe:server
-```
-
-Run the desktop app:
-
-```bash
 npm run dev
 ```
 
-The app opens as a transparent always-on-top companion. Press **Start** to connect to the local Whisper service. On macOS, the terminal or Python process may ask for microphone permission the first time the service captures audio.
-
-## Ollama setup
-
-Install Ollama from:
-
-```text
-https://ollama.com
-```
-
-Pull the default model used by this MVP:
-
-```bash
-ollama pull llama3.2
-```
-
-Start Ollama:
-
-```bash
-ollama serve
-```
-
-Then press **Ask Assistant** in the overlay. If Ollama is unavailable, the app shows a mock response instead of failing the UI.
-
-## Local transcription
-
-The app connects to:
-
-```text
-ws://127.0.0.1:8765/transcribe
-```
-
-Set up manually if you do not want to use the npm helper:
-
-```bash
-python3 -m venv transcription-service/.venv
-source transcription-service/.venv/bin/activate
-pip install -r transcription-service/requirements.txt
-python transcription-service/server.py
-```
-
-The service defaults to the small and fast `tiny.en` faster-whisper model on CPU with int8 compute. You can change it:
-
-```bash
-transcription-service/.venv/bin/python transcription-service/server.py --model small.en --chunk-seconds 4
-```
-
-The transcription code lives in:
-
-- `src/transcription/types.ts`
-- `src/transcription/mockTranscription.ts`
-- `src/transcription/whisperServiceTranscription.ts`
-- `transcription-service/server.py`
-
-## Architecture
-
-Assistant providers implement:
-
-```ts
-interface AssistantProvider {
-  readonly id: string;
-  readonly label: string;
-  ask(request: AssistantRequest): Promise<AssistantResponse>;
-}
-```
-
-Current implementations:
-
-- `OllamaAssistantProvider`
-- `MockAssistantProvider`
-
-Transcription providers implement:
-
-```ts
-interface TranscriptionProvider {
-  readonly id: string;
-  readonly label: string;
-  start(listener: TranscriptListener): Promise<void>;
-  stop(): Promise<void>;
-}
-```
-
-Current implementation:
-
-- `WhisperServiceTranscriptionProvider`
-
-## Common error states
-
-- **Ollama is not reachable**: start Ollama or keep using demo mode.
-- **Missing microphone permission**: grant microphone access for Terminal, Python, or the packaged app in system settings, then press Start again.
-- **Missing screen-capture permission**: grant screen recording permission for the app in system settings, then press Capture Screen Context again.
-
-## Build
-
-```bash
-npm run build
-```
-
-Start the built app:
+Start launches the local Whisper service when needed. The first model load can take longer while downloading `base.en`. The renderer and Electron start in the correct order. If port 5173 is occupied, the launcher selects another port. For a built desktop run without Vite:
 
 ```bash
 npm start
 ```
+
+Click the blue face to expand/collapse. The compact size is 94 x 44; the expanded default width is 520. Drag the header to move, and the bottom edge/corners to resize. Transcript is hidden by default and can be shown, copied in full, or cleared. X stops recording and minimizes the window; the Dock icon restores it. Quit from the application menu to exit.
+
+## Connect ChatGPT Once
+
+1. In Chrome, open `chrome://extensions`, enable Developer mode, and choose **Load unpacked**.
+2. Select this project's `chrome-extension` folder.
+3. Open `https://chatgpt.com/`, sign in, and open the conversation to use.
+4. In Bulby, press **Connect Chrome**. This copies a private pairing code and opens the extension folder.
+5. Open the Bulby extension popup on the ChatGPT tab, paste the code, and press **Connect**.
+6. Keep the paired tab open. Reload it if the extension was installed after the tab opened. Re-pair a replacement tab if you close it.
+
+Press **Ask** to capture the display containing Bulby and snapshot the transcript at that instant. The extension attaches the image, fills the prompt, and clicks Send. Bulby only reports success after receiving confirmation. It does not read or display ChatGPT answers; read them in Chrome. A nonempty composer or an answer in progress blocks submission. Missing connection, permission, or changed ChatGPT controls produce an error, never a mock answer. Check the ChatGPT tab before retrying a timed-out request to avoid duplicates.
+
+The extension depends on ChatGPT's web UI, which can change. Automatic sending has been implemented but still requires a live signed-in integration test after extension setup. Do not rely on it for a class until that test succeeds.
+
+## Audio Sources
+
+Choose **Microphone** for your voice, **Call audio** for a virtual loopback input, or **Both** to capture both simultaneously. Both opens two independent streams and labels their transcript entries; this is source labeling, not speaker identification. Selection is locked while recording. Start only shows recording after both devices open. If either fails, both stop. Use headphones to avoid transcribing call audio twice through your microphone. Two active sources require more processing and may increase latency. Live dual-device accuracy still needs testing on your hardware.
+
+For call audio on this Mac, install BlackHole in Terminal (macOS asks for an administrator password):
+
+```bash
+brew install --cask blackhole-2ch
+```
+
+In Audio MIDI Setup, create a Multi-Output Device containing your headphones/speakers and BlackHole 2ch. Route your meeting application's output to that device so you can still hear it, then choose **Call audio** in Bulby. See the [official BlackHole routing guide](https://github.com/ExistentialAudio/BlackHole#record-system-audio). BlackHole was not installed during automated setup because the installer required an administrator password.
+
+Grant microphone permission to the process macOS requests for audio input, and Screen Recording permission to Bulby/Electron for Ask screenshots. Screen capture requires explicit Ask; it is never continuous. Transcription stays in memory, and the browser handoff keeps one request in memory until success, failure, or timeout. Closing the app discards unsaved text.
+
+For manual service control, run only one service on port 8765:
+
+```bash
+npm run transcribe:server
+# Or for older clients that do not specify a source:
+npm run transcribe:system
+```
+
+The UI specifies its selected source on each Start. An older already-running service must be restarted after upgrading. A port-in-use error means a service is already listening; do not launch duplicates. For a different model, stop the existing service first and run:
+
+```bash
+transcription-service/.venv/bin/python transcription-service/server.py --model small.en
+```
+
+Larger models may improve accuracy at a latency cost. The current endpoint detector uses pauses, not grammatical sentence completion. Whisper may still misrecognize speech; real-call accuracy and latency need testing with your headset and meeting audio.
+
+## Verification
+
+```bash
+npm run typecheck
+npm run test:desktop
+npm run test:bridge
+transcription-service/.venv/bin/python transcription-service/test_service.py
+```
+
+Desktop tests open an isolated Electron profile and verify the sandbox preload, repeated expansion, transcript show/hide, native/visual dimensions, resize, Dock-style restoration, and synthetic screenshot/prompt submission. Bridge tests use synthetic context to verify authentication, single delivery, acknowledgement and error propagation. Python tests verify source selection and disconnect cleanup without recording.
+
+The assistant provider interfaces and Ollama/official-API stubs remain in `src/assistant` for future integrations, but the current Ask flow uses Chrome exclusively. This is a development desktop app, not a signed/notarized macOS installer.
