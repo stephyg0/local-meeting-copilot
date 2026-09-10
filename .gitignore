@@ -1,6 +1,7 @@
 node_modules
 dist-electron
 dist-renderer
+build/
 .DS_Store
 .env
 .venv

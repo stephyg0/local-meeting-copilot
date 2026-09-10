@@ -1,5 +1,5 @@
-import { app, BrowserWindow, clipboard, desktopCapturer, ipcMain, nativeImage, session, screen, shell } from "electron";
-import { spawn, type ChildProcess } from "node:child_process";
+import { app, BrowserWindow, clipboard, desktopCapturer, ipcMain, nativeImage, session, screen } from "electron";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import { createChatBridge } from "./chatBridge.js";
@@ -8,6 +8,15 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
+// Use the same profile for the instance lock, browser pairing, and app data.
+app.setName("Bulby");
+
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  if (url === "bulby://open" || url === "bulby://open/") {
+    void app.whenReady().then(() => showWindow());
+  }
+});
 
 let mainWindow: BrowserWindow | null = null;
 let transcriptionProcess: ChildProcess | null = null;
@@ -125,7 +134,12 @@ app.whenReady().then(() => {
   ipcMain.handle("transcription:ensure", ensureTranscription);
   ipcMain.handle("browser:pair", async () => {
     clipboard.writeText(bridge.token);
-    await shell.openPath(path.join(__dirname, "../chrome-extension"));
+    await new Promise<void>((resolve, reject) => {
+      execFile("/usr/bin/open", ["-b", "com.google.Chrome"], { timeout: 10000 }, error => {
+        if (error) reject(new Error("Pairing code copied, but Chrome could not be opened. Open Chrome and paste the code into the Bulby extension."));
+        else resolve();
+      });
+    });
     return true;
   });
   ipcMain.handle("browser:ask", async (_event, transcript: string, screenshot: string) => {
@@ -136,9 +150,8 @@ app.whenReady().then(() => {
     await bridge.send(prompt, screenshot);
     return true;
   });
-  app.setName("Bulby");
   app.setAppUserModelId("com.bulby.app");
-  app.dock?.setIcon(petIcon);
+  app.dock?.setIcon(nativeImage.createFromPath(path.join(__dirname, "../chrome-extension/icons/bulby-128.png")));
   app.dock?.show();
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     callback(permission === "media");
@@ -241,7 +254,7 @@ app.whenReady().then(() => {
 });
 
 app.on("second-instance", () => {
-  showWindow();
+  void app.whenReady().then(() => showWindow());
 });
 
 app.on("window-all-closed", () => {

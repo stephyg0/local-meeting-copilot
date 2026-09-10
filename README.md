@@ -20,10 +20,12 @@ Click the blue face to expand/collapse. The compact size is 94 x 44; the expande
 
 ## Connect ChatGPT Once
 
+On this Mac, open `build/Bulby.app` directly or click **Open Bulby** in the Chrome extension. Chrome may ask you to allow opening Bulby. The launcher is registered for `bulby://open` and starts the built desktop app without Terminal or Codex. Keep this project folder in place: the local launcher uses its built files and transcription environment. Rebuild with `npm run build` after code changes. This is a local launcher, not a portable distribution. To create one on another Mac after installing dependencies, run `npm run build` then `node scripts/create-launcher.mjs` and open the resulting app once to register it.
+
 1. In Chrome, open `chrome://extensions`, enable Developer mode, and choose **Load unpacked**.
 2. Select this project's `chrome-extension` folder.
 3. Open `https://chatgpt.com/`, sign in, and open the conversation to use.
-4. In Bulby, press **Connect Chrome**. This copies a private pairing code and opens the extension folder.
+4. In Bulby, press **Connect Chrome**. This copies a private pairing code and brings Chrome's existing window forward (or launches Chrome if it is closed).
 5. Open the Bulby extension popup on the ChatGPT tab, paste the code, and press **Connect**.
 6. Keep the paired tab open. Reload it if the extension was installed after the tab opened. Re-pair a replacement tab if you close it.
 
@@ -59,7 +61,7 @@ The UI specifies its selected source on each Start. An older already-running ser
 transcription-service/.venv/bin/python transcription-service/server.py --model small.en
 ```
 
-Larger models may improve accuracy at a latency cost. The current endpoint detector uses pauses, not grammatical sentence completion. Whisper may still misrecognize speech; real-call accuracy and latency need testing with your headset and meeting audio.
+Larger models may improve accuracy at a latency cost. Streaming previews begin after about one second of speech plus model processing time. Draft entries are revised in place and included in Ask and Copy. Pauses finalize a draft; continuous speech is bounded to eight-second windows with 0.8 seconds of overlap. Word timestamps exclude the previously transcribed overlap. Pending audio skips stale previews, while final windows are retained; sustained overload stops capture with an error rather than growing an unlimited backlog. The service logs decode time and queued audio duration without logging transcript text. Whisper may still misrecognize speech; real-call accuracy and latency need testing with your headset and meeting audio.
 
 ## Verification
 

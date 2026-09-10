@@ -24,7 +24,7 @@ export class WhisperServiceTranscriptionProvider implements TranscriptionProvide
       try {
         await Promise.all(children.map((child, index) => child.start(segment => listener({
           ...segment,
-          text: `[${index === 0 ? "Microphone" : "Call"}] ${segment.text}`
+          text: segment.text ? `[${index === 0 ? "Microphone" : "Call"}] ${segment.text}` : ""
         }), status, inputs[index])));
       } catch (error) {
         await this.stop();
@@ -59,14 +59,17 @@ export class WhisperServiceTranscriptionProvider implements TranscriptionProvide
           type: "segment" | "error" | "status";
           text?: string;
           message?: string;
+          id?: string;
+          isFinal?: boolean;
         };
 
-        if (message.type === "segment" && message.text?.trim()) {
+        if (message.type === "segment" && typeof message.text === "string") {
           listener({
-            id: crypto.randomUUID(),
+            id: message.id || crypto.randomUUID(),
             text: message.text.trim(),
             timestamp: new Date(),
-            source: "whisper"
+            source: "whisper",
+            isFinal: message.isFinal ?? true
           });
         }
 

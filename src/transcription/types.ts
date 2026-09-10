@@ -3,6 +3,7 @@ export interface TranscriptSegment {
   text: string;
   timestamp: Date;
   source: "mock" | "whisper";
+  isFinal?: boolean;
 }
 
 export type TranscriptListener = (segment: TranscriptSegment) => void;

@@ -12,6 +12,8 @@ import numpy as np
 import sounddevice as sd
 from faster_whisper import WhisperModel
 from websockets.server import serve
+from streaming import StreamingWindow
+import time
 
 
 SAMPLE_RATE = 16000
@@ -83,12 +85,7 @@ class MicrophoneWhisperSession:
         await self.websocket.send(json.dumps({"type": "status", "message": message}))
 
     def _record_and_transcribe(self):
-        min_speech_samples = int(SAMPLE_RATE * 0.3)
-        silence_samples = 0
-        speech_buffer: list[np.ndarray] = []
-        speech_samples = 0
-        silence_limit = int(SAMPLE_RATE * 0.55)
-        max_utterance_samples = int(SAMPLE_RATE * 8)
+        window = StreamingWindow(SAMPLE_RATE)
 
         def callback(indata, frames, _time, status):
             if status:
@@ -140,6 +137,7 @@ class MicrophoneWhisperSession:
                 channels=min(2, int(sd.query_devices(input_device)["max_input_channels"])) if self.config.audio_source == "system" else CHANNELS,
                 dtype="float32",
                 callback=callback,
+                blocksize=1600,
                 device=input_device,
             ) as stream:
                 self.stream = stream
@@ -154,33 +152,12 @@ class MicrophoneWhisperSession:
                         data = self.audio_queue.get(timeout=0.2)
                     except queue.Empty:
                         continue
-                    rms = float(np.sqrt(np.mean(np.square(data))))
-                    is_speech = rms >= 0.012
-
-                    if is_speech:
-                        speech_buffer.append(data)
-                        speech_samples += data.shape[0]
-                        silence_samples = 0
-                    elif speech_samples:
-                        speech_buffer.append(data)
-                        silence_samples += data.shape[0]
-
-                    if silence_samples >= silence_limit and speech_samples < min_speech_samples:
-                        speech_buffer = []
-                        speech_samples = 0
-                        silence_samples = 0
-
-                    utterance_ended = speech_samples >= min_speech_samples and (
-                        silence_samples >= silence_limit or speech_samples >= max_utterance_samples
-                    )
-                    if not utterance_ended:
+                    window.append(data)
+                    snapshot = window.snapshot(caught_up=self.audio_queue.empty())
+                    if snapshot is None:
                         continue
-
-                    audio = np.concatenate(speech_buffer)
-                    speech_buffer = []
-                    speech_samples = 0
-                    silence_samples = 0
-                    self._send_from_thread({"type": "status", "message": "transcribing sentence"})
+                    utterance_id, audio, context_seconds, final = snapshot
+                    started = time.monotonic()
                     segments, _info = self.model.transcribe(
                         audio,
                         beam_size=3,
@@ -192,10 +169,17 @@ class MicrophoneWhisperSession:
                         log_prob_threshold=-0.35,
                         compression_ratio_threshold=2.0,
                         temperature=0.0,
+                        word_timestamps=True,
                     )
-                    text = clean_repeated_text(" ".join(segment.text.strip() for segment in segments))
-                    if text:
-                        self._send_from_thread({"type": "segment", "text": text})
+                    text = clean_repeated_text(" ".join(
+                        word.word.strip() for segment in segments for word in (segment.words or [])
+                        if (word.start + word.end) / 2 > context_seconds
+                    ))
+                    self._send_from_thread({"type": "segment", "id": utterance_id, "text": text,
+                                            "isFinal": final})
+                    print(f"{self.config.audio_source}: {len(audio) / SAMPLE_RATE:.1f}s audio, "
+                          f"{time.monotonic() - started:.2f}s decode, "
+                          f"{self.audio_queue.qsize() * .1:.1f}s queued", flush=True)
         except Exception as exc:
             message = str(exc)
             if "PaErrorCode -9986" in message or "Internal PortAudio error" in message:

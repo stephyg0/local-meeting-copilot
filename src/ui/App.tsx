@@ -46,7 +46,12 @@ export function App() {
     try {
       await bridge?.ensureTranscription();
       if (generation !== captureGeneration.current) return;
-      await provider.start(segment => setSegments(current => [...current, segment]), (text, kind) => {
+      await provider.start(segment => setSegments(current => {
+        const index = current.findIndex(item => item.id === segment.id);
+        if (!segment.text) return current.filter(item => item.id !== segment.id);
+        if (index < 0) return [...current, segment];
+        return current.map((item, position) => position === index ? { ...segment, timestamp: item.timestamp } : item);
+      }), (text, kind) => {
         if (kind === "error") { setRecording(false); report(text, true); }
       }, source);
       if (generation !== captureGeneration.current) { await provider.stop(); return; }
@@ -76,7 +81,7 @@ export function App() {
     try {
       if (!bridge) throw new Error("Open the Bulby desktop application.");
       await bridge.pairBrowser();
-      report("Pairing code copied. Load the opened extension folder in Chrome, open ChatGPT, then paste the code into the Bulby extension.");
+      report("Pairing code copied. Paste it into the Bulby extension on your ChatGPT tab.");
     } catch (failure) { report(String(failure), true); }
   }
 
@@ -131,7 +136,7 @@ export function App() {
               <button className="text-button" disabled={!transcript} onClick={() => setSegments([])}>Clear</button>
             </div>
           </div>
-          {showTranscript && <div className="transcript-log" aria-live="polite">{segments.length ? segments.map(segment => <article key={segment.id}><p>{segment.text}</p></article>) : <p className="empty">{recording ? "Waiting for speech..." : "No transcript yet."}</p>}</div>}
+          {showTranscript && <div className="transcript-log" aria-live="polite">{segments.length ? segments.map(segment => <article key={segment.id}><p>{segment.text}{segment.isFinal === false && <small aria-label="Provisional transcript"> (draft)</small>}</p></article>) : <p className="empty">{recording ? "Waiting for speech..." : "No transcript yet."}</p>}</div>}
         </section>
       </>}
     </div>
