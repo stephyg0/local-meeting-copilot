@@ -9,7 +9,7 @@ const env = { ...process.env, BULBY_TEST_PROFILE: profile };
 delete env.VITE_DEV_SERVER_URL;
 const app = await electron.launch({ args: ["scripts/electron-fixture.mjs"], env });
 try {
-  const page = await app.firstWindow();
+  let page = await app.firstWindow();
   await page.getByRole("button", { name: "Expand copilot" }).waitFor();
   assert.equal(await page.evaluate(() => typeof window.meetingCopilot?.resizeWindow), "function", "sandboxed preload must load");
   async function bounds() {
@@ -42,7 +42,11 @@ try {
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(500, 400));
   await matched();
   await page.screenshot({ path: "/tmp/bulby-expanded-tested.png" });
-  await page.getByRole("button", { name: "Close copilot" }).click();
+  assert.equal(await app.evaluate(({ app }) => app.dock.isVisible()), true);
+  const minimize = await page.getByRole("button", { name: "Minimize copilot" }).boundingBox();
+  const close = await page.getByRole("button", { name: "Close copilot" }).boundingBox();
+  assert.ok(close.x - (minimize.x + minimize.width) >= 12);
+  await page.getByRole("button", { name: "Minimize copilot" }).click();
   for (let attempt = 0; attempt < 30; attempt++) {
     if (await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMinimized())) break;
     await new Promise(resolve => setTimeout(resolve, 100));
@@ -53,12 +57,22 @@ try {
     await new Promise(resolve => setTimeout(resolve, 100));
   }
   assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible()), true);
+  await Promise.all([
+    page.waitForEvent("close"),
+    page.getByRole("button", { name: "Close copilot" }).click()
+  ]);
+  assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length), 0);
+  assert.equal(await app.evaluate(({ app }) => app.dock.isVisible()), true);
+  await app.evaluate(({ app }) => app.emit("activate"));
+  page = await app.firstWindow();
+  await page.getByRole("button", { name: "Expand copilot" }).waitFor();
+  assert.equal(await app.evaluate(({ app }) => app.dock.isVisible()), true);
   // Exercise the extension against a synthetic composer, never a real chat.
   await page.setContent('<form><div id="prompt-textarea" contenteditable="true"></div><button type="button" data-testid="send-button">Send</button></form>');
   await page.evaluate(() => {
     window.testResults = [];
     let claimed = false;
-    window.chrome = { runtime: { sendMessage: async message => {
+    window.chrome = { runtime: { onMessage: { addListener() {} }, sendMessage: async message => {
       if (message.type === "result") { window.testResults.push(message.result); return; }
       if (claimed) return null;
       claimed = true;

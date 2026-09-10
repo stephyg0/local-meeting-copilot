@@ -13,6 +13,10 @@ export function createChatBridge(token = randomBytes(32).toString("hex")) {
     }
     lastSeen = Date.now();
     response.setHeader("Content-Type", "application/json");
+    if (request.method === "GET" && request.url === "/status") {
+      response.end(JSON.stringify({ ok: true }));
+      return;
+    }
     if (request.method === "GET" && request.url === "/next") {
       const job = pending && !pending.claimed ? pending : null;
       if (job) job.claimed = true;

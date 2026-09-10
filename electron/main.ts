@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, desktopCapturer, ipcMain, nativeImage, session, screen } from "electron";
+import { app, BrowserWindow, clipboard, desktopCapturer, ipcMain, nativeImage, session, screen, systemPreferences } from "electron";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
@@ -100,7 +100,10 @@ function createWindow() {
   });
 
   mainWindow.setAlwaysOnTop(true, "screen-saver");
-  mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+  });
 
   if (isDev && process.env.VITE_DEV_SERVER_URL) {
     void mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
@@ -151,7 +154,7 @@ app.whenReady().then(() => {
     return true;
   });
   app.setAppUserModelId("com.bulby.app");
-  app.dock?.setIcon(nativeImage.createFromPath(path.join(__dirname, "../chrome-extension/icons/bulby-128.png")));
+  app.dock?.setIcon(nativeImage.createFromPath(path.join(__dirname, "../chrome-extension/icons/bulby-desktop.png")));
   app.dock?.show();
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     callback(permission === "media");
@@ -159,19 +162,35 @@ app.whenReady().then(() => {
 
   ipcMain.handle("screen:capture", async () => {
     const display = screen.getDisplayMatching(mainWindow?.getBounds() || screen.getPrimaryDisplay().bounds);
-    const sources = await desktopCapturer.getSources({
-      types: ["screen"],
-      thumbnailSize: { width: display.size.width * display.scaleFactor, height: display.size.height * display.scaleFactor }
-    });
-    const primaryScreen = sources.find(source => source.display_id === String(display.id));
-    if (!primaryScreen || primaryScreen.thumbnail.isEmpty()) {
-      throw new Error("Screen capture unavailable. Allow Bulby/Electron in macOS Screen Recording settings.");
+    const pixelWidth = display.size.width * display.scaleFactor;
+    const pixelHeight = display.size.height * display.scaleFactor;
+    const scale = Math.min(1, 1920 / Math.max(pixelWidth, pixelHeight));
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt) await new Promise(resolve => setTimeout(resolve, attempt * 400));
+      try {
+        const sources = await desktopCapturer.getSources({
+          types: ["screen"],
+          thumbnailSize: { width: Math.round(pixelWidth * scale), height: Math.round(pixelHeight * scale) }
+        });
+        const primaryScreen = sources.find(source => source.display_id === String(display.id));
+        if (primaryScreen && !primaryScreen.thumbnail.isEmpty()) {
+          return {
+            id: primaryScreen.id,
+            name: primaryScreen.name,
+            dataUrl: `data:image/jpeg;base64,${primaryScreen.thumbnail.toJPEG(85).toString("base64")}`
+          };
+        }
+      } catch {
+        // Screen enumeration can fail transiently even with permission granted.
+      }
+      if (process.platform === "darwin") {
+        const permission = systemPreferences.getMediaAccessStatus("screen");
+        if (permission === "denied" || permission === "restricted") {
+          throw new Error("macOS is denying screen capture for this Bulby app. In System Settings > Privacy & Security > Screen & System Audio Recording, turn Bulby off and on, then quit Bulby from its Dock menu and reopen it.");
+        }
+      }
     }
-    return {
-      id: primaryScreen.id,
-      name: primaryScreen.name,
-      dataUrl: primaryScreen.thumbnail.toDataURL()
-    };
+    throw new Error("Bulby could not capture the screen after three attempts. Quit Bulby from its Dock menu and reopen it to reset the capture session. If it persists, turn Bulby's Screen & System Audio Recording access off and on in System Settings.");
   });
 
   ipcMain.handle("window:ignore-mouse", (_event, ignore: boolean) => {
@@ -179,8 +198,14 @@ app.whenReady().then(() => {
     return true;
   });
 
-  ipcMain.handle("window:close", () => {
+  ipcMain.handle("window:minimize", () => {
     mainWindow?.minimize();
+    app.dock?.show();
+    return true;
+  });
+
+  ipcMain.handle("window:close", () => {
+    mainWindow?.close();
     app.dock?.show();
     return true;
   });
@@ -190,13 +215,14 @@ app.whenReady().then(() => {
     return true;
   });
 
-  ipcMain.handle("window:resize", (_event, expanded: boolean, transcriptVisible: boolean) => {
+  ipcMain.handle("window:resize", (_event, expanded: boolean, transcriptVisible: boolean, compactAsk = false) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       const bounds = mainWindow.getBounds();
-      mainWindow.setMinimumSize(expanded ? 380 : 94, expanded ? 220 : 44);
+      const compactWidth = compactAsk ? 140 : 94;
+      mainWindow.setMinimumSize(expanded ? 380 : compactWidth, expanded ? 220 : 44);
       mainWindow.setBounds({
         ...bounds,
-        width: expanded ? 520 : 94,
+        width: expanded ? 520 : compactWidth,
         height: expanded ? (transcriptVisible ? 520 : 220) : 44
       });
     }
@@ -258,9 +284,7 @@ app.on("second-instance", () => {
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    app.quit();
-  }
+  app.dock?.show();
 });
 
 app.on("before-quit", () => { transcriptionProcess?.kill(); });

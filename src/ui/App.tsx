@@ -15,10 +15,19 @@ export function App() {
   const [error, setError] = useState(false);
   const content = useRef<HTMLDivElement>(null);
   const captureGeneration = useRef(0);
+  const messageTimer = useRef<ReturnType<typeof setTimeout>>();
   const transcript = segments.map(segment => segment.text).join("\n");
   const bridge = window.meetingCopilot;
+  const compactAsk = !expanded && recording;
 
-  function report(text: string, failed = false) { setMessage(text); setError(failed); }
+  function report(text: string, failed = false, dismissAfter = 0) {
+    clearTimeout(messageTimer.current);
+    setMessage(text);
+    setError(failed);
+    if (dismissAfter) messageTimer.current = setTimeout(() => setMessage(""), dismissAfter);
+  }
+
+  useEffect(() => () => clearTimeout(messageTimer.current), []);
 
   useEffect(() => () => { void provider.stop(); }, [provider]);
 
@@ -26,7 +35,7 @@ export function App() {
     let cancelled = false;
     let observer: ResizeObserver | undefined;
     void (async () => {
-      await bridge?.resizeWindow(expanded, false);
+      await bridge?.resizeWindow(expanded, false, compactAsk);
       if (cancelled || !expanded || !content.current) return;
       const measure = () => {
         if (!cancelled && content.current) void bridge?.resizeWindowToContent(Math.ceil(content.current.getBoundingClientRect().height) + 26);
@@ -36,7 +45,7 @@ export function App() {
       measure();
     })();
     return () => { cancelled = true; observer?.disconnect(); };
-  }, [expanded]);
+  }, [expanded, compactAsk]);
 
   async function start() {
     if (starting || recording) return;
@@ -73,7 +82,7 @@ export function App() {
       const screenshot = await bridge.captureScreen();
       await bridge.askBrowser(snapshotTranscript, screenshot.dataUrl);
       report("Sent to ChatGPT.");
-    } catch (failure) { report(failure instanceof Error ? failure.message : String(failure), true); }
+    } catch (failure) { setExpanded(true); report(failure instanceof Error ? failure.message : String(failure), true); }
     finally { setAsking(false); }
   }
 
@@ -81,7 +90,7 @@ export function App() {
     try {
       if (!bridge) throw new Error("Open the Bulby desktop application.");
       await bridge.pairBrowser();
-      report("Pairing code copied. Paste it into the Bulby extension on your ChatGPT tab.");
+      report("Pairing code copied. Paste it into the Bulby extension on your ChatGPT tab.", false, 6000);
     } catch (failure) { report(String(failure), true); }
   }
 
@@ -90,6 +99,7 @@ export function App() {
     catch { report("Could not copy the transcript.", true); }
   }
 
+  async function minimize() { await bridge?.minimizeWindow(); }
   async function close() { await stop(); await bridge?.closeWindow(); }
 
   function beginResize(event: React.PointerEvent<HTMLDivElement>, edge: "bottom-left" | "bottom-center" | "bottom-right") {
@@ -104,7 +114,7 @@ export function App() {
     void bridge?.resizeWindowEnd();
   }
 
-  return <main className={`pet-shell ${expanded ? "expanded" : "compact"}`}>
+  return <main className={`pet-shell ${expanded ? "expanded" : "compact"}${compactAsk ? " with-ask" : ""}`}>
     <div ref={content} className="shell-content">
       <header className="drag-region pet-head">
         <button className={`pet-face ${recording ? "active" : ""}`} aria-label={expanded ? "Collapse copilot" : "Expand copilot"} onClick={() => { setExpanded(!expanded); setShowTranscript(false); }}>
@@ -112,7 +122,11 @@ export function App() {
         </button>
         <div className="pet-title"><strong>{recording ? (source === "both" ? "recording mic + call" : source === "system" ? "recording call audio" : "recording microphone") : "ready"}</strong></div>
         <div className="audio-bars" aria-label={recording ? "Recording" : "Idle"}>{[0,1,2,3,4].map(i => <span key={i} />)}</div>
-        <button className="close-button" onClick={() => void close()} aria-label="Close copilot">×</button>
+        {compactAsk && <button className="compact-ask" disabled={asking} aria-label={asking ? "Sending to ChatGPT" : "Ask"} aria-busy={asking} title="Send current screen and transcript to ChatGPT" onClick={() => void ask()}>{asking ? "..." : "Ask"}</button>}
+        <div className="window-controls">
+          <button className="window-button minimize-button" onClick={() => void minimize()} aria-label="Minimize copilot">-</button>
+          <button className="window-button close-button" onClick={() => void close()} aria-label="Close copilot">×</button>
+        </div>
       </header>
       {expanded && <>
         <div className="audio-source" role="group" aria-label="Audio source">

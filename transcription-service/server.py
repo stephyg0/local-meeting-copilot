@@ -160,7 +160,7 @@ class MicrophoneWhisperSession:
                     started = time.monotonic()
                     segments, _info = self.model.transcribe(
                         audio,
-                        beam_size=3,
+                        beam_size=3 if final else 1,
                         vad_filter=True,
                         vad_parameters={"min_silence_duration_ms": 220, "speech_pad_ms": 100},
                         language="en",
@@ -169,12 +169,16 @@ class MicrophoneWhisperSession:
                         log_prob_threshold=-0.35,
                         compression_ratio_threshold=2.0,
                         temperature=0.0,
-                        word_timestamps=True,
+                        word_timestamps=context_seconds > 0,
                     )
-                    text = clean_repeated_text(" ".join(
-                        word.word.strip() for segment in segments for word in (segment.words or [])
-                        if (word.start + word.end) / 2 > context_seconds
-                    ))
+                    # Alignment is needed only to exclude overlap from the preceding window.
+                    if context_seconds > 0:
+                        text = clean_repeated_text(" ".join(
+                            word.word.strip() for segment in segments for word in (segment.words or [])
+                            if (word.start + word.end) / 2 > context_seconds
+                        ))
+                    else:
+                        text = clean_repeated_text(" ".join(segment.text.strip() for segment in segments))
                     self._send_from_thread({"type": "segment", "id": utterance_id, "text": text,
                                             "isFinal": final})
                     print(f"{self.config.audio_source}: {len(audio) / SAMPLE_RATE:.1f}s audio, "

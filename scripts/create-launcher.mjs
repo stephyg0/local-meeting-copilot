@@ -4,6 +4,8 @@ import path from "node:path";
 
 const root = process.cwd();
 const target = path.join(root, "build/Bulby.app");
+const updateIcon = process.argv.includes("--update-icon");
+if (!updateIcon) {
 try {
   await access(target);
   throw new Error("build/Bulby.app already exists. Keep or move that launcher before creating another.");
@@ -13,8 +15,9 @@ try {
 await mkdir(path.dirname(target), { recursive: true });
 await cp(path.join(root, "node_modules/electron/dist/Electron.app"), target, { recursive: true, verbatimSymlinks: true });
 await symlink(root, path.join(target, "Contents/Resources/app"));
+}
 const plist = path.join(target, "Contents/Info.plist");
-const png = await readFile(path.join(root, "chrome-extension/icons/bulby-128.png"));
+const png = await readFile(path.join(root, "chrome-extension/icons/bulby-desktop.png"));
 const header = Buffer.alloc(16);
 header.write("icns", 0);
 header.writeUInt32BE(png.length + 16, 4);

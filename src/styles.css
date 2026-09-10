@@ -92,6 +92,9 @@ button:disabled {
   height: 100vh;
 }
 
+.pet-shell.compact.with-ask { width: 140px; }
+.pet-shell.compact.with-ask .pet-head { grid-template-columns: 28px 30px 48px; }
+
 .shell-content { display: flow-root; }
 .audio-source { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 18px; }
 .audio-source button { min-height: 28px; font-size: 12px; }
@@ -134,7 +137,7 @@ button:disabled {
 
 .pet-shell.compact .pet-head {
   grid-template-columns: 28px 30px;
-  gap: 4px;
+  gap: 6px;
   justify-content: center;
   -webkit-app-region: drag;
 }
@@ -162,7 +165,21 @@ button:disabled {
   transform: translateY(2px);
 }
 
-.pet-shell.compact .close-button,
+.compact-ask {
+  width: 48px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  font-size: 12px;
+  color: #081713;
+  background: #78e0b1;
+  transform: translateY(2px);
+  -webkit-app-region: no-drag;
+}
+
+.compact-ask:hover { background: #9cecc8; }
+
+.pet-shell.compact .window-controls,
 .pet-shell.compact .expand-arrow {
   display: none;
 }
@@ -173,12 +190,20 @@ button:disabled {
 
 .pet-head {
   display: grid;
-  grid-template-columns: 28px 1fr 0 28px;
+  grid-template-columns: 28px minmax(0, 1fr) 30px auto;
   align-items: center;
   gap: 10px;
 }
 
-.close-button {
+.window-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-right: 10px;
+  -webkit-app-region: no-drag;
+}
+
+.window-button {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -192,6 +217,15 @@ button:disabled {
   font-weight: 400;
   line-height: 1;
   -webkit-app-region: no-drag;
+}
+
+.minimize-button {
+  font-size: 20px;
+}
+
+.minimize-button:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
 }
 
 .close-button:hover {

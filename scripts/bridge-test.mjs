@@ -6,6 +6,8 @@ const url = `http://127.0.0.1:${bridge.server.address().port}`;
 const headers = { Authorization: `Bearer ${bridge.token}` };
 try {
   assert.equal((await fetch(`${url}/next`)).status, 401);
+  assert.equal((await fetch(`${url}/status`)).status, 401);
+  assert.deepEqual(await (await fetch(`${url}/status`, { headers })).json(), { ok: true });
   assert.equal(await (await fetch(`${url}/next`, { headers })).json(), null);
   assert.equal(bridge.connected(), true);
   const delivery = bridge.send("Test transcript", "data:image/png;base64,test");

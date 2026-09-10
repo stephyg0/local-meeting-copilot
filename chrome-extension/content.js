@@ -1,11 +1,14 @@
 let busy = false;
+chrome.runtime.onMessage.addListener((message, _sender, reply) => {
+  if (message.type === "bulby:ready") reply({ ok: true });
+});
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check, timeout = 30000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     const value = check();
     if (value) return value;
-    await delay(200);
+    await delay(100);
   }
   throw new Error("ChatGPT was not ready. Check sign-in, attachment upload, and the composer before retrying.");
 }
@@ -17,7 +20,7 @@ async function send(job) {
   editor.focus();
   const image = await (await fetch(job.screenshot)).blob();
   const transfer = new DataTransfer();
-  transfer.items.add(new File([image], "bulby-screen.png", { type: image.type }));
+  transfer.items.add(new File([image], image.type === "image/jpeg" ? "bulby-screen.jpg" : "bulby-screen.png", { type: image.type }));
   editor.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: transfer }));
   // Do not send until ChatGPT visibly accepts an image attachment.
   await until(() => editor.closest("form")?.querySelector('img[src^="blob:"], img[alt*="upload" i], button[aria-label*="remove" i]'));
@@ -42,4 +45,4 @@ setInterval(async () => {
     await chrome.runtime.sendMessage({ type: "result", result: { id: job.id, error } });
   } catch { /* Disconnected Bulby is idle, not a reason to touch the page. */ }
   finally { busy = false; }
-}, 1000);
+}, 250);
