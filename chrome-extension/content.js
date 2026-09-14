@@ -2,15 +2,25 @@ let busy = false;
 chrome.runtime.onMessage.addListener((message, _sender, reply) => {
   if (message.type === "bulby:ready") reply({ ok: true });
 });
-const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-async function until(check, timeout = 30000) {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    const value = check();
-    if (value) return value;
-    await delay(100);
-  }
-  throw new Error("ChatGPT was not ready. Check sign-in, attachment upload, and the composer before retrying.");
+function until(check, timeout = 15000, failure = "ChatGPT's composer is unavailable. Open the paired tab and check that you are signed in.") {
+  return new Promise((resolve, reject) => {
+    let timer;
+    const observer = new MutationObserver(inspect);
+    function finish(error, value) {
+      observer.disconnect();
+      clearTimeout(timer);
+      if (error) reject(error); else resolve(value);
+    }
+    function inspect() {
+      try {
+        const value = check();
+        if (value) finish(null, value);
+      } catch (error) { finish(error); }
+    }
+    observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, characterData: true });
+    timer = setTimeout(() => finish(new Error(failure)), timeout);
+    inspect();
+  });
 }
 async function send(job) {
   const editor = await until(() => document.querySelector('#prompt-textarea[contenteditable="true"]'));
@@ -22,17 +32,18 @@ async function send(job) {
   const transfer = new DataTransfer();
   transfer.items.add(new File([image], image.type === "image/jpeg" ? "bulby-screen.jpg" : "bulby-screen.png", { type: image.type }));
   editor.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: transfer }));
-  // Do not send until ChatGPT visibly accepts an image attachment.
-  await until(() => editor.closest("form")?.querySelector('img[src^="blob:"], img[alt*="upload" i], button[aria-label*="remove" i]'));
   editor.focus();
   document.execCommand("insertText", false, job.prompt);
   if (!editor.textContent.includes(job.prompt.slice(0, 80))) throw new Error("Could not fill the ChatGPT prompt. Nothing was submitted.");
+  // Fill the prompt while the image uploads, but never submit without an attachment.
+  await until(() => editor.closest("form")?.querySelector('img[src^="blob:"], img[alt*="upload" i], button[aria-label*="remove" i]'), 15000,
+    "ChatGPT did not accept the screenshot. Check the attachment in the paired tab; nothing was submitted.");
   const button = await until(() => {
-    const candidate = document.querySelector('[data-testid="send-button"]');
-    return candidate && !candidate.disabled ? candidate : null;
-  });
+    const candidate = editor.closest("form")?.querySelector('[data-testid="send-button"]');
+    return candidate && !candidate.disabled && candidate.getAttribute("aria-disabled") !== "true" ? candidate : null;
+  }, 15000, "ChatGPT's Send button is still unavailable. Check whether the screenshot is uploading or ChatGPT shows a limit. Your draft has not been submitted.");
   button.click();
-  await until(() => !editor.textContent.trim(), 10000);
+  await until(() => !editor.textContent.trim(), 10000, "ChatGPT did not confirm submission. Check the tab before retrying to avoid a duplicate.");
 }
 setInterval(async () => {
   if (busy) return;

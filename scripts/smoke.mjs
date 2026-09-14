@@ -82,7 +82,10 @@ try {
       window.pastedFileCount = event.clipboardData.files.length;
       const remove = document.createElement('button');
       remove.setAttribute('aria-label', 'Remove attachment');
-      document.querySelector('form').append(remove);
+      const sendButton = document.querySelector('[data-testid="send-button"]');
+      sendButton.disabled = true;
+      setTimeout(() => document.querySelector('form').append(remove), 100);
+      setTimeout(() => { sendButton.disabled = false; }, 300);
     });
     document.querySelector('[data-testid="send-button"]').onclick = () => {
       window.sentPrompt = document.querySelector('#prompt-textarea').textContent;
